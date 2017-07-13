@@ -32,6 +32,8 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
     // keys for local storage
     private static let NotifyMe_key = "notifyme"
+    private static let UseBackground_key = "background"
+    private static let UseBGTasks_key = "bgtasks"
     private static let RequestUpdates_key = "updates"
     private static let RequestSignificantLocationChange_key = "significantLocationChange"
     private static let RequestVisits_key = "visits"
@@ -40,6 +42,9 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     private static let FenceRegionLon_key = "fence_region_lon"
 
     @IBOutlet var requestLocation: UISegmentedControl!
+
+    @IBOutlet var allowBackground: UISwitch!
+    @IBOutlet var allowBackgroundTasks: UISwitch!
 
     @IBOutlet var requestLocationUpdate: UISwitch!
     @IBOutlet var requestOne: UIButton!
@@ -55,7 +60,11 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     private var locManager: CLLocationManager?
     private var lastLocation: CLLocation?
     private var geocence: CLRegion?
+
     private var notifyMe:Bool = false
+    private var useBGTask:Bool = false
+
+    private var bgTaskRequestsIdentifiers: [String:Int] = [:]
 
     private var lastMessageUpdate: Date = Date()
 
@@ -65,12 +74,14 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
         // Do any additional setup after loading the view, typically from a nib.
         locManager = CLLocationManager()
         locManager?.pausesLocationUpdatesAutomatically = false
-        locManager?.allowsBackgroundLocationUpdates = true
+        locManager?.allowsBackgroundLocationUpdates = true // will get overriden by restoreState if needed
 
         self.restoreStatus()
         self.restoreState()
 
         self.requestLocation.addTarget(self, action: #selector(onRequestUserAuthorization(sender:)), for: UIControlEvents.valueChanged)
+        self.allowBackground.addTarget(self, action: #selector(onAllowBackground(sender:)), for: UIControlEvents.valueChanged)
+        self.allowBackgroundTasks.addTarget(self, action: #selector(onUseBackgroundTasks(sender:)), for: UIControlEvents.valueChanged)
 
         self.requestLocationUpdate.addTarget(self, action: #selector(onRequestUpdate(sender:)), for: UIControlEvents.touchUpInside)
         self.requestOne.addTarget(self, action: #selector(onRequestOneUpdate(sender:)), for: UIControlEvents.touchUpInside)
@@ -133,6 +144,33 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
 
+    // set allowsBackgroundLocationUpdates on the location manager (same for every type of location)
+    @objc
+    func onAllowBackground(sender:UISwitch) {
+        if let locationManager = self.locManager {
+            // Set the delegate
+            locationManager.delegate = self
+            locationManager.allowsBackgroundLocationUpdates = sender.isOn
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
+        }
+    }
+
+
+    // set if we want to insert location updates in a background task (same for every type of location)
+    @objc
+    func onUseBackgroundTasks(sender:UISwitch) {
+        self.useBGTask = sender.isOn
+
+        if !self.useBGTask {
+            for (_, val) in self.bgTaskRequestsIdentifiers {
+                UIApplication.shared.endBackgroundTask(val)
+            }
+        }
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
+    }
+
+
     // one location setup
     @objc
     func onRequestOneUpdate(sender:UIButton) {
@@ -168,10 +206,17 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             locationManager.delegate = self
 
             if sender.isOn {
-                UIApplication.shared.beginBackgroundTask(withName: "location_background_update", expirationHandler: {
-                        self.textBox.text = "Did not end background task"
-                        self.nextMessage()
-                })
+                if self.useBGTask {
+                    if let ender = self.bgTaskRequestsIdentifiers["location_background_update"] {
+                        UIApplication.shared.endBackgroundTask(ender)
+                    }
+
+                    self.bgTaskRequestsIdentifiers["location_background_update"] = UIApplication.shared.beginBackgroundTask(withName: "location_background_update",
+                                                                                                                            expirationHandler: {
+                            self.textBox.text = "Did not end background task location change"
+                            self.nextMessage()
+                    })
+                }
 
                 locationManager.startUpdatingLocation()
                 textBox?.text = "Location Change On"
@@ -197,6 +242,16 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             locationManager.delegate = self
 
             if sender.isOn {
+                if self.useBGTask {
+                    if let ender = self.bgTaskRequestsIdentifiers["location_background_significant"] {
+                        UIApplication.shared.endBackgroundTask(ender)
+                    }
+
+                    self.bgTaskRequestsIdentifiers["location_background_significant"] = UIApplication.shared.beginBackgroundTask(withName: "location_background_significant", expirationHandler: {
+                        self.textBox.text = "Did not end background task significant location change"
+                        self.nextMessage()
+                    })
+                }
                 locationManager.startMonitoringSignificantLocationChanges()
                 textBox?.text = "Significant Location Change On"
                 self.nextMessage()
@@ -219,6 +274,18 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             locationManager.delegate = self
 
             if sender.isOn {
+                if self.useBGTask {
+                    if let ender = self.bgTaskRequestsIdentifiers["location_background_visits"] {
+                        UIApplication.shared.endBackgroundTask(ender)
+                    }
+
+                    self.bgTaskRequestsIdentifiers["location_background_visits"] = UIApplication.shared.beginBackgroundTask(withName: "location_background_visits",
+                                                                                                                            expirationHandler: {
+                        self.textBox.text = "Did not end background task visits"
+                        self.nextMessage()
+                    })
+                }
+
                 locationManager.startMonitoringVisits()
                 textBox?.text = "Visit On"
                 self.nextMessage()
@@ -255,6 +322,18 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
                     sender.setOn(false, animated: true)
                     self.nextMessage()
                     return
+                }
+
+                if self.useBGTask {
+                    if let ender = self.bgTaskRequestsIdentifiers["location_background_fence"] {
+                        UIApplication.shared.endBackgroundTask(ender)
+                    }
+
+                    self.bgTaskRequestsIdentifiers["location_background_fence"] = UIApplication.shared.beginBackgroundTask(withName: "location_background_fence",
+                                                                                                                            expirationHandler: {
+                        self.textBox.text = "Did not end background task geofence"
+                        self.nextMessage()
+                    })
                 }
 
                 locationManager.startMonitoring(for: newregion)
@@ -314,16 +393,19 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        let task = UIApplication.shared.beginBackgroundTask(expirationHandler: {
-            self.textBox.text = "Did not end background task"
-            self.nextMessage()
-        })
+
+        if self.useBGTask {
+            let task = UIApplication.shared.beginBackgroundTask(expirationHandler: {
+                self.textBox.text = "Did not end background task for location received"
+                self.nextMessage()
+            })
+
+            defer { UIApplication.shared.endBackgroundTask(task) }
+        }
 
         self.lastLocation = locations.first
         self.textBox.text = "Location Update: \(locations.first?.debugDescription ?? "no location")"
         self.nextMessage()
-
-        UIApplication.shared.endBackgroundTask(task)
     }
 
     func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
@@ -388,6 +470,8 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     private func storeState() {
         DispatchQueue.main.async {
             UserDefaults.standard.set(self.notifyMe, forKey: ViewController.NotifyMe_key)
+            UserDefaults.standard.set(self.allowBackground.isOn, forKey: ViewController.UseBackground_key)
+            UserDefaults.standard.set(self.allowBackgroundTasks.isOn, forKey: ViewController.UseBGTasks_key)
             UserDefaults.standard.set(self.requestVisits.isOn, forKey: ViewController.RequestVisits_key)
             UserDefaults.standard.set(self.requestSignificantLocationChange.isOn, forKey: ViewController.RequestSignificantLocationChange_key)
             UserDefaults.standard.set(self.requestLocationUpdate.isOn, forKey: ViewController.RequestUpdates_key)
@@ -405,6 +489,16 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
     @objc
     private func restoreState() {
+
+        if UserDefaults.standard.bool(forKey: ViewController.UseBGTasks_key) {
+            self.useBGTask = true
+            self.allowBackgroundTasks.setOn(true, animated: false)
+        }
+
+        if !UserDefaults.standard.bool(forKey: ViewController.UseBackground_key) {
+            locManager?.allowsBackgroundLocationUpdates = false
+            self.allowBackground.setOn(false, animated: false)
+        }
 
         if UserDefaults.standard.bool(forKey: ViewController.NotifyMe_key) {
             self.notifyMe = true
