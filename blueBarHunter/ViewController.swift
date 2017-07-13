@@ -30,6 +30,15 @@ import CoreLocation
 class ViewController: UIViewController, CLLocationManagerDelegate {
 
 
+    // keys for local storage
+    private static let NotifyMe_key = "notifyme"
+    private static let RequestUpdates_key = "updates"
+    private static let RequestSignificantLocationChange_key = "significantLocationChange"
+    private static let RequestVisits_key = "visits"
+    private static let RequestFence_key = "fence"
+    private static let FenceRegionLat_key = "fence_region_lat"
+    private static let FenceRegionLon_key = "fence_region_lon"
+
     @IBOutlet var requestLocation: UISegmentedControl!
 
     @IBOutlet var requestLocationUpdate: UISwitch!
@@ -40,11 +49,13 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     @IBOutlet var requestVisits: UISwitch!
     @IBOutlet var requestFence: UISwitch!
 
+    @IBOutlet var requestNotifications: UISwitch!
     @IBOutlet var textBox: UILabel!
 
     private var locManager: CLLocationManager?
     private var lastLocation: CLLocation?
     private var geocence: CLRegion?
+    private var notifyMe:Bool = false
 
     private var lastMessageUpdate: Date = Date()
 
@@ -53,8 +64,12 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
         super.viewDidLoad()
         // Do any additional setup after loading the view, typically from a nib.
         locManager = CLLocationManager()
+        locManager?.pausesLocationUpdatesAutomatically = false
+        locManager?.allowsBackgroundLocationUpdates = true
 
-        self.updateStatus()
+        self.restoreStatus()
+        self.restoreState()
+
         self.requestLocation.addTarget(self, action: #selector(onRequestUserAuthorization(sender:)), for: UIControlEvents.valueChanged)
 
         self.requestLocationUpdate.addTarget(self, action: #selector(onRequestUpdate(sender:)), for: UIControlEvents.touchUpInside)
@@ -64,13 +79,20 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
         self.requestSignificantLocationChange.addTarget(self, action: #selector(onRequestSignificantLocationChange(sender:)), for: UIControlEvents.touchUpInside)
         self.requestVisits.addTarget(self, action: #selector(onRequestVisits(sender:)), for: UIControlEvents.touchUpInside)
         self.requestFence.addTarget(self, action: #selector(onGeoFence(sender:)), for: UIControlEvents.touchUpInside)
+        self.requestNotifications.addTarget(self, action: #selector(onNotifyMe(sender:)), for: UIControlEvents.touchUpInside)
 
-        NotificationCenter.default.addObserver(self, selector: #selector(updateStatus), name: NSNotification.Name.UIApplicationWillEnterForeground, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(restoreStatus), name: NSNotification.Name.UIApplicationWillEnterForeground, object: nil)
     }
 
     override func didReceiveMemoryWarning() {
         super.didReceiveMemoryWarning()
         // Dispose of any resources that can be recreated.
+    }
+
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        self.storeState()
     }
 
     // request for location, will display the famous popup.
@@ -108,26 +130,6 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
 
-    // location setup
-    func onRequestUpdate(sender:UISwitch) {
-        if let locationManager = self.locManager,
-            CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
-            locationManager.delegate = self
-
-            if sender.isOn {
-                locationManager.startUpdatingLocation()
-                textBox?.text = "Location Change On"
-                self.nextMessage()
-            } else {
-                locationManager.stopUpdatingLocation()
-                textBox?.text = "Location Change Off"
-                self.nextMessage()
-            }
-        }
-
-    }
-
-
     // one location setup
     func onRequestOneUpdate(sender:UIButton) {
         if let locationManager = self.locManager,
@@ -136,7 +138,6 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             locationManager.requestLocation()
         }
     }
-
 
     // read location
     func onReadLocatiopn(sender:UIButton) {
@@ -152,6 +153,32 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
                 self.nextMessage()
             }
         }
+    }
+
+    // location setup
+    func onRequestUpdate(sender:UISwitch) {
+        if let locationManager = self.locManager,
+            CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
+            locationManager.delegate = self
+
+            if sender.isOn {
+                UIApplication.shared.beginBackgroundTask(withName: "location_background_update", expirationHandler: {
+                        self.textBox.text = "Did not end background task"
+                        self.nextMessage()
+                })
+
+                locationManager.startUpdatingLocation()
+                textBox?.text = "Location Change On"
+                self.nextMessage()
+            } else {
+                locationManager.stopUpdatingLocation()
+                textBox?.text = "Location Change Off"
+                self.nextMessage()
+            }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
+        }
+
     }
 
 
@@ -171,6 +198,8 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
                 textBox?.text = "Significant Location Change Off"
                 self.nextMessage()
             }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
         }
     }
 
@@ -190,9 +219,10 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
                 textBox?.text = "Visit Off"
                 self.nextMessage()
             }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
         }
     }
-
 
     // 200 meters geofence around me
     func onGeoFence(sender:UISwitch) {
@@ -201,15 +231,24 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             locationManager.delegate = self
 
             if sender.isOn {
-                guard let currentLocation = self.lastLocation else {
-                    textBox?.text = "Request One location First"
+                var region: CLRegion?
+
+                if let currentRegion = self.geocence {
+                    region = currentRegion
+
+                } else if let currentLocation = self.lastLocation {
+                    region =  CLCircularRegion(center: currentLocation.coordinate, radius: 200, identifier: "Geofence")
+                    self.geocence = region
+                }
+
+                guard let newregion = region else {
+                    textBox?.text = "Request one location First"
+                    sender.setOn(false, animated: true)
                     self.nextMessage()
                     return
                 }
 
-                let region = CLCircularRegion(center: currentLocation.coordinate, radius: 200, identifier: "Geofence")
-                self.geocence = region
-                locationManager.startMonitoring(for: region)
+                locationManager.startMonitoring(for: newregion)
                 textBox?.text = "Geofence Setup Done"
                 self.nextMessage()
 
@@ -221,11 +260,27 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
                 }
 
                 locationManager.stopMonitoring(for: currentGeofence)
+                self.geocence = nil
                 textBox?.text = "Geofence Removed"
                 self.nextMessage()
             }
+
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
         }
 
+    }
+
+
+    // annoy user with a notification every time we print something
+    func onNotifyMe(sender:UISwitch) {
+        if sender.isOn {
+            let notificationSettings = UIUserNotificationSettings(types: UIUserNotificationType.alert, categories: nil)
+            UIApplication.shared.registerUserNotificationSettings(notificationSettings)
+        }
+
+        self.notifyMe = sender.isOn
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { self.storeState() }
     }
 
 
@@ -240,7 +295,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
         }
 
         self.nextMessage()
-        self.updateStatus()
+        self.restoreStatus()
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
@@ -249,14 +304,27 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        let task = UIApplication.shared.beginBackgroundTask(expirationHandler: {
+            self.textBox.text = "Did not end background task"
+            self.nextMessage()
+        })
+
         self.lastLocation = locations.first
         self.textBox.text = "Location Update: \(locations.first?.debugDescription ?? "no location")"
         self.nextMessage()
+
+        UIApplication.shared.endBackgroundTask(task)
     }
 
     func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
+        let task = UIApplication.shared.beginBackgroundTask(expirationHandler: {
+            self.textBox.text = "Did not end background task"
+            self.nextMessage()
+        })
+
         self.textBox.text = "Visit : \(visit.debugDescription)"
         self.nextMessage()
+        UIApplication.shared.endBackgroundTask(task)
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
@@ -274,15 +342,24 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     private func nextMessage() {
         NSLog(self.textBox.text ?? "")
         self.lastMessageUpdate = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            if -self.lastMessageUpdate.timeIntervalSinceNow > 3.8 {
+
+        if self.notifyMe {
+            let notification = UILocalNotification()
+            notification.alertAction = nil
+            notification.alertBody = self.textBox.text ?? "No message"
+            UIApplication.shared.presentLocalNotificationNow(notification)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+            if -self.lastMessageUpdate.timeIntervalSinceNow > 4.8 {
                 self.textBox.text = ""
             }
         }
     }
 
+    // updates the current status of the app based on what is stored and user settings
     @objc
-    private func updateStatus() {
+    private func restoreStatus() {
         switch CLLocationManager.authorizationStatus() {
         case .authorizedAlways :
             self.requestLocation.selectedSegmentIndex = 0
@@ -294,6 +371,59 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
             self.requestLocation.selectedSegmentIndex = 2
             self.requestLocation.isEnabled = false
         default:()
+        }
+    }
+
+
+    private func storeState() {
+        UserDefaults.standard.set(self.notifyMe, forKey: ViewController.NotifyMe_key)
+        UserDefaults.standard.set(self.requestVisits.isOn, forKey: ViewController.RequestVisits_key)
+        UserDefaults.standard.set(self.requestSignificantLocationChange.isOn, forKey: ViewController.RequestSignificantLocationChange_key)
+        UserDefaults.standard.set(self.requestLocationUpdate.isOn, forKey: ViewController.RequestUpdates_key)
+
+        if self.requestFence.isOn, let fence = self.geocence as? CLCircularRegion {
+            UserDefaults.standard.set(true, forKey: ViewController.RequestFence_key)
+            UserDefaults.standard.set(fence.center.latitude, forKey: ViewController.FenceRegionLat_key)
+            UserDefaults.standard.set(fence.center.longitude, forKey: ViewController.FenceRegionLon_key)
+        } else {
+            UserDefaults.standard.set(false, forKey: ViewController.RequestFence_key)
+        }
+    }
+
+
+    @objc
+    private func restoreState() {
+
+        if UserDefaults.standard.bool(forKey: ViewController.NotifyMe_key) {
+            self.notifyMe = true
+            self.requestNotifications.setOn(true, animated: false)
+            self.onNotifyMe(sender: self.requestNotifications)
+        }
+
+        if UserDefaults.standard.bool(forKey: ViewController.RequestVisits_key) {
+            self.requestVisits.setOn(true, animated: false)
+            self.onRequestVisits(sender: self.requestVisits)
+        }
+
+        if UserDefaults.standard.bool(forKey: ViewController.RequestSignificantLocationChange_key) {
+            self.requestSignificantLocationChange.setOn(true, animated: false)
+            self.onRequestSignificantLocationChange(sender: self.requestSignificantLocationChange)
+        }
+
+        if UserDefaults.standard.bool(forKey: ViewController.RequestUpdates_key) {
+            self.requestLocationUpdate.setOn(true, animated: false)
+            self.onRequestUpdate(sender: self.requestLocationUpdate)
+        }
+
+        if UserDefaults.standard.bool(forKey: ViewController.RequestFence_key) {
+            let lat = UserDefaults.standard.double(forKey: ViewController.FenceRegionLat_key)
+            let lon = UserDefaults.standard.double(forKey: ViewController.FenceRegionLon_key)
+
+            let region = CLCircularRegion(center: CLLocationCoordinate2D(latitude:lat, longitude:lon) , radius: 200, identifier: "Geofence")
+            self.geocence = region
+
+            self.requestFence.setOn(true, animated: false)
+            self.onGeoFence(sender:self.requestFence)
         }
     }
 
