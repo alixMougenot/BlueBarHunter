@@ -95,7 +95,10 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
         self.storeState()
     }
 
+    //MARK: - UI bindings
+
     // request for location, will display the famous popup.
+    @objc
     func onRequestUserAuthorization(sender:UISegmentedControl) {
 
         if let locationManager = self.locManager {
@@ -131,6 +134,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
 
     // one location setup
+    @objc
     func onRequestOneUpdate(sender:UIButton) {
         if let locationManager = self.locManager,
             CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
@@ -140,6 +144,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     // read location
+    @objc
     func onReadLocatiopn(sender:UIButton) {
         if let locationManager = self.locManager,
             CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
@@ -156,6 +161,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     // location setup
+    @objc
     func onRequestUpdate(sender:UISwitch) {
         if let locationManager = self.locManager,
             CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
@@ -183,6 +189,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
 
     // visit setup
+    @objc
     func onRequestSignificantLocationChange(sender:UISwitch) {
 
         if let locationManager = self.locManager,
@@ -204,6 +211,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     // visit setup
+    @objc
     func onRequestVisits(sender:UISwitch) {
 
         if let locationManager = self.locManager,
@@ -225,6 +233,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
     }
 
     // 200 meters geofence around me
+    @objc
     func onGeoFence(sender:UISwitch) {
         if let locationManager = self.locManager,
             CLLocationManager.authorizationStatus() == .authorizedAlways || CLLocationManager.authorizationStatus() == .authorizedWhenInUse {
@@ -272,6 +281,7 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
 
     // annoy user with a notification every time we print something
+    @objc
     func onNotifyMe(sender:UISwitch) {
         if sender.isOn {
             let notificationSettings = UIUserNotificationSettings(types: UIUserNotificationType.alert, categories: nil)
@@ -376,17 +386,19 @@ class ViewController: UIViewController, CLLocationManagerDelegate {
 
 
     private func storeState() {
-        UserDefaults.standard.set(self.notifyMe, forKey: ViewController.NotifyMe_key)
-        UserDefaults.standard.set(self.requestVisits.isOn, forKey: ViewController.RequestVisits_key)
-        UserDefaults.standard.set(self.requestSignificantLocationChange.isOn, forKey: ViewController.RequestSignificantLocationChange_key)
-        UserDefaults.standard.set(self.requestLocationUpdate.isOn, forKey: ViewController.RequestUpdates_key)
+        DispatchQueue.main.async {
+            UserDefaults.standard.set(self.notifyMe, forKey: ViewController.NotifyMe_key)
+            UserDefaults.standard.set(self.requestVisits.isOn, forKey: ViewController.RequestVisits_key)
+            UserDefaults.standard.set(self.requestSignificantLocationChange.isOn, forKey: ViewController.RequestSignificantLocationChange_key)
+            UserDefaults.standard.set(self.requestLocationUpdate.isOn, forKey: ViewController.RequestUpdates_key)
 
-        if self.requestFence.isOn, let fence = self.geocence as? CLCircularRegion {
-            UserDefaults.standard.set(true, forKey: ViewController.RequestFence_key)
-            UserDefaults.standard.set(fence.center.latitude, forKey: ViewController.FenceRegionLat_key)
-            UserDefaults.standard.set(fence.center.longitude, forKey: ViewController.FenceRegionLon_key)
-        } else {
-            UserDefaults.standard.set(false, forKey: ViewController.RequestFence_key)
+            if self.requestFence.isOn, let fence = self.geocence as? CLCircularRegion {
+                UserDefaults.standard.set(true, forKey: ViewController.RequestFence_key)
+                UserDefaults.standard.set(fence.center.latitude, forKey: ViewController.FenceRegionLat_key)
+                UserDefaults.standard.set(fence.center.longitude, forKey: ViewController.FenceRegionLon_key)
+            } else {
+                UserDefaults.standard.set(false, forKey: ViewController.RequestFence_key)
+            }
         }
     }
 
